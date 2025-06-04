@@ -9,17 +9,16 @@ contract PartiesAndVotersControl is AccessControl {
     bytes32 public constant PARTY_ROLE = keccak256("PARTY_ROLE");
 
     // Mapping of request states: party => voter => state
-    enum RequestState { NeverRequested, Cleared, Pending }
+    enum RequestState { NeverRequested, Pending, Accepted, Rejected }
     mapping(address => mapping(address => RequestState)) public requestStatus;
 
-    // Voters per Party
-    mapping(address => mapping(address => bool)) public isVoterOfParty;
-
-    // Parties per Voter (optional, if you want to keep track of which parties a voter is in)
-    mapping(address => address[]) public partiesOfVoter;
-
-    // Array to store all voters that requested to participate in a party
+    // Array to keep all requested voters for each party
+    // party => array of requested voters
     mapping(address => address[]) public allRequestedVoters;
+
+    // Array to keep all parties
+    address[] public allParties;
+    mapping(address => bool) public isParty;
 
     constructor() {
         _grantRole(ROOT_ADMIN_ROLE, msg.sender);
@@ -44,12 +43,8 @@ contract PartiesAndVotersControl is AccessControl {
         require(hasRole(PARTY_ROLE, msg.sender), "Only Party can accept");
         require(requestStatus[msg.sender][voter] == RequestState.Pending, "No pending request");
 
-        // Register association
-        isVoterOfParty[msg.sender][voter] = true;
-        partiesOfVoter[voter].push(msg.sender);
-
-        // Clear the request (set to Cleared)
-        requestStatus[msg.sender][voter] = RequestState.Cleared;
+        // Clear the request (set to Accepted)
+        requestStatus[msg.sender][voter] = RequestState.Accepted;
     }
 
     /// Party rejects the Voter
@@ -57,8 +52,8 @@ contract PartiesAndVotersControl is AccessControl {
         require(hasRole(PARTY_ROLE, msg.sender), "Only Party can reject");
         require(requestStatus[msg.sender][voter] == RequestState.Pending, "No pending request");
 
-        // Clear the request (set to Cleared)
-        requestStatus[msg.sender][voter] = RequestState.Cleared;
+        // Clear the request (set to Rejected)
+        requestStatus[msg.sender][voter] = RequestState.Rejected;
     }
 
     /// Party removes a Voter
@@ -66,41 +61,7 @@ contract PartiesAndVotersControl is AccessControl {
         require(hasRole(PARTY_ROLE, msg.sender), "Only Party can remove");
 
         // Remove from Party's voter mapping
-        isVoterOfParty[msg.sender][voter] = false;
-
-        // Remove Party from Voter's list
-        _removeFromArray(partiesOfVoter[voter], msg.sender);
-    }
-
-    // Internal function to remove an address from an array
-    function _removeFromArray(address[] storage arr, address target) internal {
-        uint len = arr.length;
-        for (uint i = 0; i < len; i++) {
-            if (arr[i] == target) {
-                arr[i] = arr[len - 1];
-                arr.pop();
-                break;
-            }
-        }
-    }
-
-    function getPartiesFromVoterPaginated(
-        address voter,
-        uint256 start,
-        uint256 limit
-    ) external view returns (address[] memory) {
-        address[] storage fullList = partiesOfVoter[voter];
-        uint256 end = start + limit;
-        if (end > fullList.length) {
-            end = fullList.length;
-        }
-
-        address[] memory page = new address[](end - start);
-        for (uint256 i = start; i < end; i++) {
-            page[i - start] = fullList[i];
-        }
-
-        return page;
+        requestStatus[msg.sender][voter] = RequestState.Rejected;
     }
 
     /// Read all requested voters for a party (paginated)
@@ -123,6 +84,8 @@ contract PartiesAndVotersControl is AccessControl {
         return page;
     }
 
+/// Voting system for Parties and Voters
+    // Voting structure
     struct Voting {
         string description;
         uint256 deadline;
@@ -131,14 +94,18 @@ contract PartiesAndVotersControl is AccessControl {
         string[] options;
     }
 
+    // Mappings resulting in global and local votings
     mapping(uint256 => Voting) public globalVotings;
     mapping(address => mapping(uint256 => Voting)) public votingsByParty;
 
+    // Indexes for last global and local votings
     uint256 public globalVotingCounter;
     mapping(address => uint256) public votingCounterByParty;
 
     /// Starts a global voting (ROOT_ADMIN)
-    function startGlobalVoting(string memory description, string[] memory options, uint256 durationSeconds) external onlyRole(ROOT_ADMIN_ROLE) {
+    function startGlobalVoting(string memory description, 
+        string[] memory options, 
+        uint256 durationSeconds) external onlyRole(ROOT_ADMIN_ROLE) {
         Voting storage v = globalVotings[globalVotingCounter];
         v.description = description;
         v.deadline = block.timestamp + durationSeconds;
@@ -168,7 +135,7 @@ contract PartiesAndVotersControl is AccessControl {
 
     /// Voter votes in local voting of their Party
     function voteLocal(address party, uint256 id, string memory option) external {
-        require(isVoterOfParty[party][msg.sender], "Not a member of this Party");
+        require(requestStatus[party][msg.sender] == PartiesAndVotersControl.RequestState.Accepted, "Not a member of this Party");
         Voting storage v = votingsByParty[party][id];
         require(block.timestamp <= v.deadline, "Voting closed");
         require(!v.hasVoted[msg.sender], "Already voted");
@@ -188,8 +155,8 @@ contract PartiesAndVotersControl is AccessControl {
     }
 
     /// Checks if an address is a Voter of a Party
-    function isVoterOfPartyFunc(address voter, address party) public view returns (bool) {
-        return isVoterOfParty[party][voter];
+    function isVoterOfParty(address voter, address party) public view returns (bool) {
+        return requestStatus[party][voter] == PartiesAndVotersControl.RequestState.Accepted;
     }
 
     /// Returns all global votings (paginated)
@@ -237,5 +204,26 @@ contract PartiesAndVotersControl is AccessControl {
     ) {
         Voting storage v = votingsByParty[party][id];
         return (v.description, v.deadline, v.options);
+    }
+
+    /// Adds a new party and grants PARTY_ROLE (only ROOT_ADMIN)
+    function addParty(address party) external onlyRole(ROOT_ADMIN_ROLE) {
+        require(!isParty[party], "Already a party");
+        _grantRole(PARTY_ROLE, party);
+        allParties.push(party);
+        isParty[party] = true;
+    }
+
+    /// Returns all parties (paginated)
+    function getAllParties(uint256 offset, uint256 limit) external view returns (address[] memory) {
+        uint256 end = offset + limit;
+        if (end > allParties.length) {
+            end = allParties.length;
+        }
+        address[] memory page = new address[](end - offset);
+        for (uint256 i = offset; i < end; i++) {
+            page[i - offset] = allParties[i];
+        }
+        return page;
     }
 }

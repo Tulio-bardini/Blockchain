@@ -17,7 +17,7 @@ describe("PartiesAndVotersControl", function () {
   it("should allow a voter to request to join a party", async function () {
     await contract.connect(voter1).requestVoter(party1.address);
     const status = await contract.requestStatus(party1.address, voter1.address);
-    expect(status).to.equal(2); // Pending
+    expect(status).to.equal(1); // Pending
     const allRequested = await contract.getAllRequestedVotersPaginated(party1.address, 0, 10);
     expect(allRequested).to.include(voter1.address);
   });
@@ -25,19 +25,17 @@ describe("PartiesAndVotersControl", function () {
   it("should allow a party to accept a voter", async function () {
     await contract.connect(voter1).requestVoter(party1.address);
     await contract.connect(party1).acceptVoter(voter1.address);
-    expect(await contract.isVoterOfParty(party1.address, voter1.address)).to.be.true;
-    const parties = await contract.getPartiesFromVoterPaginated(voter1.address, 0, 10);
-    expect(parties).to.include(party1.address);
+    expect(await contract.isVoterOfParty(voter1.address, party1.address)).to.be.true;
     const status = await contract.requestStatus(party1.address, voter1.address);
-    expect(status).to.equal(1); // Cleared
+    expect(status).to.equal(2); // Accepted
   });
 
   it("should allow a party to reject a voter", async function () {
     await contract.connect(voter2).requestVoter(party2.address);
     await contract.connect(party2).rejectVoter(voter2.address);
-    expect(await contract.isVoterOfParty(party2.address, voter2.address)).to.be.false;
+    expect(await contract.isVoterOfParty(voter2.address, party2.address)).to.be.false;
     const status = await contract.requestStatus(party2.address, voter2.address);
-    expect(status).to.equal(1); // Cleared
+    expect(status).to.equal(3); // Rejected
   });
 
   it("should allow a party to remove a voter", async function () {
